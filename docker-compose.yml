@@ -1,0 +1,78 @@
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — shared database for both Paperclip and local dev
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gtm
+      POSTGRES_USER: gtm
+      POSTGRES_PASSWORD: gtm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gtm -d gtm"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # ---------------------------------------------------------------------------
+  # OpenClaw Gateway — agent execution runtime
+  #
+  # The official image runs as uid 1000 (node) with config at
+  # /home/node/.openclaw.  We mount our agents/ directory read-only so the
+  # provision script can register them on first boot.
+  # ---------------------------------------------------------------------------
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      HOME: /home/node
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-change-me-to-a-secret-token}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:18789/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    ports:
+      - "18789:18789"
+    volumes:
+      - openclaw_config:/home/node/.openclaw
+      - ./agents:/home/node/.openclaw/agents-config:ro
+
+  # ---------------------------------------------------------------------------
+  # App — this Paperclip fork (GTM agent platform)
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openclaw:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://gtm:gtm@postgres:5432/gtm
+      OPENCLAW_GATEWAY_URL: ws://openclaw:18789
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-change-me-to-a-secret-token}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+      NODE_ENV: production
+      PORT: "3100"
+      SERVE_UI: "true"
+    ports:
+      - "3100:3100"
+    volumes:
+      - app_data:/app/data
+
+volumes:
+  postgres_data:
+  openclaw_config:
+  app_data:
